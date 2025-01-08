@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+import sys
+import json
+import os
+import random
+import numpy as np
+
+def print_help():
+    help_text = """USAGE
+./my_torch_generator config_file_1 nb_1 [config_file_2 nb_2...]
+
+DESCRIPTION
+    config_file_i   Configuration file containing description of a neural network we want to generate.
+    nb_i    Number of neural networks to generate based on the configuration file."""
+    print(help_text)
+
+def validate_config(config, config_file):
+    required_keys = [
+        "name", "layers", "activation_hidden", "activation_output", 
+        "optimizer", "learning_rate", "batch_size", "dropout_rate",
+        "momentum", "beta1", "beta2", "epsilon", "l2_lambda"
+    ]
+    missing_keys = [key for key in required_keys if key not in config]
+    if missing_keys:
+        print(f"Error: Configuration file '{config_file}' is missing keys: {', '.join(missing_keys)}.", file=sys.stderr)
+        sys.exit(84)
+
+def generate_network(config, index, output_dir):
+    validate_config(config, config_file=os.path.basename(output_dir))
+    network = {
+        "name": config["name"],
+        "layers": config["layers"],
+        "activation_hidden": config["activation_hidden"],
+        "activation_output": config["activation_output"],
+        "optimizer": config["optimizer"],
+        "learning_rate": config["learning_rate"],
+        "batch_size": config["batch_size"],
+        "dropout_rate": config["dropout_rate"],
+        "momentum": config["momentum"],
+        "beta1": config["beta1"],
+        "beta2": config["beta2"],
+        "epsilon": config["epsilon"],
+        "l2_lambda": config["l2_lambda"],
+        "weights": initialize_weights(config["layers"], 
+                                   config["activation_hidden"],
+                                   config["activation_output"])
+    }
+    filename = os.path.join(output_dir, f"{config['name']}_{index}.nn")
+    try:
+        with open(filename, 'w') as f:
+            json.dump(network, f, indent=4)
+    except IOError as e:
+        print(f"Error: Could not write to file '{filename}'. {e}", file=sys.stderr)
+        sys.exit(84)
+
+def initialize_weights(layers, activation_hidden, activation_output):
+    weights = []
+    for i in range(len(layers)-1):
+        if i < len(layers) - 2:
+            if activation_hidden == "relu":
+                scale = np.sqrt(2.0 / layers[i])
+            else:
+                scale = np.sqrt(1.0 / layers[i])
+        else:
+            if activation_output == "softmax":
+                scale = np.sqrt(1.0 / layers[i])
+            else:
+                scale = np.sqrt(1.0 / layers[i])
+        
+        layer_weights = [[random.gauss(0, scale) for _ in range(layers[i])] 
+                        for _ in range(layers[i+1])]
+        weights.append(layer_weights)
+    return weights
+
+def main():
+    if len(sys.argv) < 3 or len(sys.argv[1:]) % 2 != 0 or '--help' in sys.argv:
+        print_help()
+        sys.exit(0)
+    
+    args = sys.argv[1:]
+    for i in range(0, len(args), 2):
+        config_file = args[i]
+        try:
+            nb = int(args[i+1])
+            if nb <= 0:
+                raise ValueError
+        except ValueError:
+            print(f"Error: nb_i must be a positive integer. Got '{args[i + 1]}'", file=sys.stderr)
+            sys.exit(84)
+            
+        if not os.path.isfile(config_file):
+            print(f"Error: Configuration file '{config_file}' does not exist.", file=sys.stderr)
+            sys.exit(84)
+            
+        try:
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+        except json.JSONDecodeError:
+            print(f"Error: Configuration file '{config_file}' is not a valid JSON.", file=sys.stderr)
+            sys.exit(84)
+            
+        validate_config(config, config_file)
+        output_dir = os.path.dirname(config_file) or '.'
+        
+        for j in range(1, nb + 1):
+            generate_network(config, j, output_dir)
+    
+    sys.exit(0)
+
+if __name__ == "__main__":
+    main()

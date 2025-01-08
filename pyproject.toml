@@ -1,0 +1,86 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "my-torch"
+version = "1.0.0"
+description = "A neural network implementation for chess position analysis"
+readme = "README.md"
+license = { file = "LICENSE.txt" }
+authors = [
+    {name = "Matéo Lechantre", email = "mateo.lechantre@epitech.eu"},
+    {name = "Lucas Debize", email = "lucas.debize@epitech.eu"},
+]
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3.7",
+    "Development Status :: 4 - Beta",
+]
+dependencies = [
+    "numpy>=1.19.0",
+    "hatch>=1.7.0",
+]
+
+[project.scripts]
+my_torch_analyzer = "my_torch_analyzer:main"
+my_torch_generator = "my_torch_generator:main"
+
+[tool.setuptools]
+py-modules = ["my_torch_analyzer", "my_torch_generator"]
+
+[tool.black]
+line-length = 100
+target-version = ["py37"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+multi_line_output = 3
+
+[tool.pytest]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.hatch.envs.linting]
+detached = true
+dependencies = [
+    "black>=23.1.0",
+    "mypy>=1.0.0",
+    "ruff>=0.0.243",
+]
+
+[tool.hatch.envs.linting.scripts]
+typing = "mypy --config-file=pyproject.toml {args:} ."
+style = [
+    "ruff check .",
+    "black --check .",
+]
+fmt = [
+    "black .",
+    "style",
+]
+all = [
+    "style",
+]
+
+[tool.ruff]
+target-version = "py37"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+]
+
+[tool.mypy]
+python_version = "3.7"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+check_untyped_defs = true

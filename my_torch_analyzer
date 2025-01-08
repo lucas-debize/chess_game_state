@@ -1,0 +1,408 @@
+#!/usr/bin/env python3
+import sys
+import json
+import argparse
+import os
+import numpy as np
+import random
+
+random.seed(42)
+np.random.seed(42)
+
+class NeuralNetwork:
+    def __init__(self, config):
+        self.layers = config.get("layers", [])
+        self.activation_hidden = config.get("activation_hidden", "relu")
+        self.activation_output = config.get("activation_output", "softmax")
+        self.optimizer = config.get("optimizer", "sgd")
+        self.learning_rate = config.get("learning_rate", 0.01)
+        self.weights = []
+        self.biases = []
+        self.batch_size = config.get("batch_size", 32)
+        self.dropout_rate = config.get("dropout_rate", 0.2)
+        self.momentum = config.get("momentum", 0.9)
+        self.beta1 = config.get("beta1", 0.9)
+        self.beta2 = config.get("beta2", 0.999)
+        self.epsilon = config.get("epsilon", 1e-8)
+        self.l2_lambda = config.get("l2_lambda", 0.01)
+        loaded_weights = config.get("weights", None)
+        loaded_biases = config.get("biases", None)
+        
+        for i in range(len(self.layers) - 1):
+            if loaded_weights and len(loaded_weights) > i:
+                weight = np.array(loaded_weights[i])
+            else:
+                if i < len(self.layers) - 2:
+                    if self.activation_hidden == "relu":
+                        weight = np.random.randn(self.layers[i + 1], self.layers[i]) * np.sqrt(2 / self.layers[i])
+                    else:
+                        weight = np.random.randn(self.layers[i + 1], self.layers[i]) * np.sqrt(1 / self.layers[i])
+                else:
+                    if self.activation_output == "softmax":
+                        weight = np.random.randn(self.layers[i + 1], self.layers[i]) * np.sqrt(1 / self.layers[i])
+                    else:
+                        weight = np.random.randn(self.layers[i + 1], self.layers[i]) * np.sqrt(1 / self.layers[i])
+            self.weights.append(weight)
+            
+            if loaded_biases and len(loaded_biases) > i:
+                bias = np.array(loaded_biases[i])
+            else:
+                bias = np.zeros((self.layers[i + 1], 1))
+            self.biases.append(bias)
+
+        # Initialize Adam optimizer parameters
+        self.v = [np.zeros_like(w) for w in self.weights]
+        self.m = [np.zeros_like(w) for w in self.weights]
+        self.t = 0
+
+    def activation_func(self, z, layer_idx):
+        if layer_idx < len(self.weights) - 1:
+            if self.activation_hidden == "relu":
+                return np.maximum(0, z)
+            elif self.activation_hidden == "sigmoid":
+                return 1 / (1 + np.exp(-z))
+            else:
+                return z
+        else:
+            if self.activation_output == "softmax":
+                exp_z = np.exp(z - np.max(z, axis=0, keepdims=True))
+                return exp_z / np.sum(exp_z, axis=0, keepdims=True)
+            elif self.activation_output == "sigmoid":
+                return 1 / (1 + np.exp(-z))
+            else:
+                return z
+
+    def activation_derivative(self, z, layer_idx):
+        if layer_idx < len(self.weights) - 1:
+            if self.activation_hidden == "relu":
+                return (z > 0).astype(float)
+            elif self.activation_hidden == "sigmoid":
+                sig = 1 / (1 + np.exp(-z))
+                return sig * (1 - sig)
+            else:
+                return np.ones_like(z)
+        else:
+            return None
+
+    def forward(self, x):
+        self.z_values = []
+        self.a_values = [x]
+        a = x
+        for i in range(len(self.weights)):
+            z = np.dot(self.weights[i], a) + self.biases[i]
+            self.z_values.append(z)
+            a = self.activation_func(z, i)
+            self.a_values.append(a)
+        return a
+
+    def compute_loss(self, y_pred, y_true):
+        m = y_true.shape[1]
+        epsilon = 1e-15
+        y_pred = np.clip(y_pred, epsilon, 1 - epsilon)
+        cross_entropy_loss = -np.sum(y_true * np.log(y_pred)) / m
+        
+        # Add L2 regularization
+        l2_loss = 0
+        for w in self.weights:
+            l2_loss += np.sum(np.square(w))
+        l2_loss = (self.l2_lambda / (2 * m)) * l2_loss
+        
+        return cross_entropy_loss + l2_loss
+
+    def backward(self, y_pred, y_true):
+        m = y_true.shape[1]
+        gradients = {}
+        if self.activation_output == "softmax":
+            delta = y_pred - y_true
+        else:
+            delta = (y_pred - y_true) * self.activation_derivative(self.z_values[-1], len(self.weights)-1)
+
+        gradients["dW" + str(len(self.weights))] = np.dot(delta, self.a_values[-2].T) / m
+        gradients["db" + str(len(self.biases))] = np.sum(delta, axis=1, keepdims=True) / m
+
+        for l in range(len(self.weights) - 2, -1, -1):
+            dz = np.dot(self.weights[l + 1].T, delta) * self.activation_derivative(self.z_values[l], l)
+            delta = dz
+            gradients["dW" + str(l + 1)] = np.dot(delta, self.a_values[l].T) / m
+            gradients["db" + str(l + 1)] = np.sum(delta, axis=1, keepdims=True) / m
+        
+        return gradients
+
+    def update_parameters(self, gradients):
+        self.t += 1
+        if self.optimizer == "adam":
+            for l in range(len(self.weights)):
+                # Adam optimization
+                self.m[l] = self.beta1 * self.m[l] + (1 - self.beta1) * gradients[f"dW{l+1}"]
+                self.v[l] = self.beta2 * self.v[l] + (1 - self.beta2) * np.square(gradients[f"dW{l+1}"])
+                
+                m_hat = self.m[l] / (1 - self.beta1 ** self.t)
+                v_hat = self.v[l] / (1 - self.beta2 ** self.t)
+                
+                self.weights[l] -= self.learning_rate * m_hat / (np.sqrt(v_hat) + self.epsilon)
+                self.biases[l] -= self.learning_rate * gradients[f"db{l+1}"]
+        else:
+            # Original SGD
+            for l in range(len(self.weights)):
+                self.weights[l] -= self.learning_rate * gradients[f"dW{l+1}"]
+                self.biases[l] -= self.learning_rate * gradients[f"db{l+1}"]
+
+    def train(self, training_data, epochs=30, patience=5, save_path="checkpoints"):
+        # Create checkpoints directory if it doesn't exist
+        os.makedirs(save_path, exist_ok=True)
+        
+        best_accuracy = 0
+        patience_counter = 0
+        
+        # Convert training data to numpy arrays for faster processing
+        X = np.array([data[0] for data in training_data]).T
+        Y = np.array([data[1] for data in training_data]).T
+        
+        n_batches = len(training_data) // self.batch_size
+        
+        for epoch in range(epochs):
+            total_loss = 0.0
+            correct_predictions = 0
+            random.shuffle(training_data)
+            
+            # Shuffle data
+            indices = np.random.permutation(len(training_data))
+            X_shuffled = X[:, indices]
+            Y_shuffled = Y[:, indices]
+            
+            print(f"\nEpoch {epoch + 1}/{epochs}")
+            for batch_idx in range(n_batches):
+                start_idx = batch_idx * self.batch_size
+                end_idx = start_idx + self.batch_size
+                
+                # Get batch
+                X_batch = X_shuffled[:, start_idx:end_idx]
+                Y_batch = Y_shuffled[:, start_idx:end_idx]
+                
+                # Forward pass
+                y_pred = self.forward(X_batch)
+                loss = self.compute_loss(y_pred, Y_batch)
+                total_loss += loss
+                
+                # Calculate accuracy
+                predicted_classes = np.argmax(y_pred, axis=0)
+                true_classes = np.argmax(Y_batch, axis=0)
+                correct_predictions += np.sum(predicted_classes == true_classes)
+                
+                # Backward pass
+                gradients = self.backward(y_pred, Y_batch)
+                self.update_parameters(gradients)
+                
+                # Update progress bar
+                current_accuracy = (correct_predictions / ((batch_idx + 1) * self.batch_size)) * 100
+                suffix = f"loss: {loss:.4f} accuracy: {current_accuracy:.2f}%"
+                print_progress_bar(batch_idx + 1, n_batches, prefix='Progress:', suffix=suffix)
+            
+            # Calculate epoch metrics
+            avg_loss = total_loss / n_batches
+            accuracy = (correct_predictions / len(training_data)) * 100
+            
+            print(f"Epoch {epoch + 1}/{epochs}, Loss: {avg_loss:.6f}, Accuracy: {accuracy:.2f}%")
+            
+            # Save network after each epoch
+            epoch_save_path = os.path.join(save_path, f"network_epoch_{epoch + 1}.nn")
+            save_network(self, epoch_save_path)
+            print(f"Network saved to {epoch_save_path}")
+            
+            # Early stopping check
+            if accuracy > best_accuracy:
+                best_accuracy = accuracy
+                patience_counter = 0
+                # Save best model
+                best_model_path = os.path.join(save_path, "best_model.nn")
+                save_network(self, best_model_path)
+            else:
+                patience_counter += 1
+            
+            if patience_counter >= patience:
+                print(f"Early stopping at epoch {epoch + 1}")
+                break
+
+    def predict(self, inputs):
+        x = inputs.reshape(-1, 1)
+        y_pred = self.forward(x)
+        return y_pred
+
+def load_network(file_path):
+    if not os.path.isfile(file_path):
+        print(f"Error: Neural network file '{file_path}' does not exist.", file=sys.stderr)
+        sys.exit(84)
+    with open(file_path, 'r') as f:
+        config = json.load(f)
+    return NeuralNetwork(config)
+
+def save_network(network, file_path):
+    network_data = {
+        "layers": network.layers,
+        "activation_hidden": network.activation_hidden,
+        "activation_output": network.activation_output,
+        "optimizer": network.optimizer,
+        "learning_rate": network.learning_rate,
+        "weights": [w.tolist() for w in network.weights],
+        "biases": [b.tolist() for b in network.biases]
+    }
+    with open(file_path, 'w') as f:
+        json.dump(network_data, f, indent=4)
+    print(f"Network saved to {file_path}")
+
+def parse_fen(fen):
+    parts = fen.split()
+    if len(parts) != 6:
+        print(f"Error: Invalid FEN format: '{fen}'", file=sys.stderr)
+        sys.exit(84)
+    board, turn, castling, en_passant, halfmove, fullmove = parts
+    piece_map = {'p': -1, 'n': -2, 'b': -3, 'r': -4, 'q': -5, 'k': -6,
+                'P': 1, 'N': 2, 'B': 3, 'R': 4, 'Q': 5, 'K': 6}
+    board_vector = []
+    for row in board.split('/'):
+        for char in row:
+            if char.isdigit():
+                board_vector.extend([0] * int(char))
+            else:
+                board_vector.append(piece_map.get(char, 0))
+    return np.array(board_vector)
+
+def encode_label(label):
+    label_map = {
+        "Checkmate White": [1, 0, 0, 0, 0, 0],
+        "Checkmate Black": [0, 1, 0, 0, 0, 0],
+        "Check White": [0, 0, 1, 0, 0, 0],
+        "Check Black": [0, 0, 0, 1, 0, 0],
+        "Stalemate": [0, 0, 0, 0, 1, 0],
+        "Nothing": [0, 0, 0, 0, 0, 1]
+    }
+    return label_map.get(label, [0, 0, 0, 0, 0, 0])
+
+def load_training_data(file_path):
+    training_data = []
+    with open(file_path, 'r') as f:
+        for line_number, line in enumerate(f, start=1):
+            parts = line.strip().split()
+            if len(parts) < 7:
+                print(f"Skipping invalid line {line_number}: {line.strip()}", file=sys.stderr)
+                continue
+            fen = ' '.join(parts[:6])
+            label = ' '.join(parts[6:])
+            try:
+                inputs = parse_fen(fen)
+                outputs = encode_label(label)
+                training_data.append((inputs, outputs))
+            except Exception as e:
+                print(f"Error processing line {line_number}: {e}", file=sys.stderr)
+                sys.exit(84)
+    return training_data
+
+def load_prediction_data(file_path):
+    prediction_data = []
+    with open(file_path, 'r') as f:
+        for line_number, line in enumerate(f, start=1):
+            parts = line.strip().split()
+            if len(parts) < 6:
+                print(f"Skipping invalid line {line_number}: {line.strip()}", file=sys.stderr)
+                continue
+            fen = ' '.join(parts[:6])
+            prediction_data.append(fen)
+    return prediction_data
+
+def train_mode(network, file_path, save_path=None):
+    training_data = load_training_data(file_path)
+    if not training_data:
+        print("Error: No training data found.", file=sys.stderr)
+        sys.exit(84)
+    
+    # Create checkpoints directory
+    checkpoints_dir = os.path.join(os.path.dirname(file_path), "checkpoints")
+    network.train(training_data, save_path=checkpoints_dir)
+    
+    # Save final model
+    if save_path:
+        save_network(network, save_path)
+    else:
+        save_network(network, file_path)
+    print("Training completed and network saved.")
+    sys.exit(0)
+
+def predict_mode(network, file_path):
+    prediction_data = load_prediction_data(file_path)
+    if not prediction_data:
+        print("Error: No prediction data found.", file=sys.stderr)
+        sys.exit(84)
+    label_map = {
+        0: "Checkmate White",
+        1: "Checkmate Black",
+        2: "Check White",
+        3: "Check Black",
+        4: "Stalemate",
+        5: "Nothing"
+    }
+    for fen in prediction_data:
+        try:
+            inputs = parse_fen(fen)
+            y_pred = network.predict(inputs)
+            predicted_class = np.argmax(y_pred, axis=0)[0]
+            label = label_map.get(predicted_class, "Stalemate" if predicted_class == 4 else "Nothing")
+            print(label)
+        except Exception as e:
+            print(f"Error processing FEN '{fen}': {e}", file=sys.stderr)
+    sys.exit(0)
+
+def augment_data(training_data):
+    augmented_data = []
+    for inputs, outputs in training_data:
+        # Original data
+        augmented_data.append((inputs, outputs))
+        
+        # Flip horizontally
+        flipped = np.flip(inputs.reshape(8, 8), axis=1).reshape(-1)
+        augmented_data.append((flipped, outputs))
+        
+        # Rotate 180 degrees
+        rotated = np.rot90(inputs.reshape(8, 8), k=2).reshape(-1)
+        augmented_data.append((rotated, outputs))
+    
+    return augmented_data
+
+def print_progress_bar(iteration, total, prefix='', suffix='', length=50, fill='█'):
+    """
+    Call in a loop to create terminal progress bar
+    Parameters:
+        iteration   - Required  : current iteration (Int)
+        total       - Required  : total iterations (Int)
+        prefix      - Optional  : prefix string (Str)
+        suffix      - Optional  : suffix string (Str)
+        length      - Optional  : character length of bar (Int)
+        fill        - Optional  : bar fill character (Str)
+    """
+    percent = ("{0:.1f}").format(100 * (iteration / float(total)))
+    filled_length = int(length * iteration // total)
+    bar = fill * filled_length + '-' * (length - filled_length)
+    print(f'\r{prefix} |{bar}| {percent}% {suffix}', end='')
+    # Print new line on complete
+    if iteration == total:
+        print()
+
+def main():
+    parser = argparse.ArgumentParser(description="Chessboard Analyzer")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('--train', action='store_true', help='Launch the neural network in training mode.')
+    group.add_argument('--predict', action='store_true', help='Launch the neural network in prediction mode.')
+    parser.add_argument('--save', type=str, help='Save neural network into SAVEFILE. Only works in train mode.')
+    parser.add_argument('LOADFILE', type=str, help='File containing an artificial neural network')
+    parser.add_argument('FILE', type=str, help='File containing chessboards')
+    
+    args = parser.parse_args()
+
+    network = load_network(args.LOADFILE)
+
+    if args.train:
+        train_mode(network, args.FILE, args.save)
+    elif args.predict:
+        predict_mode(network, args.FILE)
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,11 @@
+./my_torch_generator basic_network.conf 1
+
+./my_torch_analyzer --train --save trained_network.nn basic_network_1.nn datasets/check/10_pieces.txt
+ou
+./my_torch_analyzer --train --save trained_network.nn basic_network_1.nn datasets/training_data.txt
+
+./my_torch_analyzer --predict trained_network.nn datasets/test_check.txt
+ou
+./my_torch_analyzer --predict trained_network.nn datasets/chess.txt
+ou
+./my_torch_analyzer --predict trained_network.nn datasets/test_all.txt
