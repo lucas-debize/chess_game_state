@@ -1,4 +1,3 @@
-```markdown
 # BETA TEST PLAN – Elyrii
 
 ## 1. Project Context
@@ -92,4 +91,3 @@ The following 18 features represent the complete feature set to be validated dur
 **Document Version:** 1.0  
 **Date:** January 30, 2026  
 **Classification:** Internal Beta Testing Documentation
-```
